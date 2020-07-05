@@ -1,0 +1,1 @@
+LD_LIBRARY_PATH=/usr/local/cuda-9.0/lib64 python generate_samples.py --samples-dir /mnt/data/samples/deeprec-icpr20 --seed 0
