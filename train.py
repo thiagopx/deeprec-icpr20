@@ -69,179 +69,161 @@ def train_and_validate(samples_dir, train_dir):
 
     ''' Training stage. '''
 
-    # tf.reset_default_graph()
+
+    # 1) train -----
+    t0 = time.time() # start cron
+
+    # setup train data directory
+    os.makedirs('{}/model'.format(train_dir), exist_ok=True)
+
+    # clear default graph
+    tf.reset_default_graph()
+
+    # setting up the dataset of samples
+    filenames, _ = get_dataset_info(samples_dir, mode='train')
+    num_samples = len(filenames)
+    input_size = cv2.imread(filenames[0]).shape
+    H, W, C = input_size
+
+    # placeholders
+    images_ph = tf.placeholder(tf.float32, name='images_ph', shape=(None, H, W, C)) # channels last
+    labels_ph = tf.placeholder(tf.float32, name='labels_ph', shape=(None, CONFIG_NUM_CLASSES)) # one-hot enconding
+    global_step_ph = tf.placeholder(tf.int32, name='global_step_ph', shape=()) # control dropout of the model
+
+    # dataset iterator
+    next_batch_op = input_fn(samples_dir, mode='train', img_shape=(H, W), num_channels=C)
+
+    # architecture definition
+    model = SqueezeNet(images_ph, num_classes=CONFIG_NUM_CLASSES, mode='train', channels_first=False)
+    # logits_op = tf.reshape(model.output, [-1, CONFIG_NUM_CLASSES]) # #batches x #classes (squeeze height dimension)
+
+    # # loss function
+    # loss_op = tf.losses.softmax_cross_entropy(onehot_labels=labels_ph, logits=logits_op)
+
+    # # learning rate definition
+    # num_steps_per_epoch = math.ceil(num_samples / CONFIG_TRAIN_BATCH_SIZE)
+    # total_steps = CONFIG_TRAIN_NUM_EPOCHS * num_steps_per_epoch
+    # decay_steps = math.ceil(CONFIG_TRAIN_STEP_SIZE * total_steps)
+    # learning_rate_op = tf.train.exponential_decay(CONFIG_TRAIN_INIT_LEARNING_RATE, global_step_ph, decay_steps, 0.1, staircase=True)
+
+    # # optimizer (adam method) and training operation
+    # optimizer = tf.train.AdamOptimizer(learning_rate_op, name='adam')
+    # train_op = optimizer.minimize(loss_op)
 
     # session setup
     config = tf.ConfigProto()
     config.gpu_options.allow_growth = True
     sess = tf.Session(config=config)
 
-    # 1) train -----
-    with tf.variable_scope('Train', reuse=tf.AUTO_REUSE):
-        print('A')
-        # setting up the dataset of samples
-        filenames, _ = get_dataset_info(samples_dir, mode='train')
-        num_samples = len(filenames)
-        input_size = cv2.imread(filenames[0]).shape
-        H, W, C = input_size
-        print('B')
+    # init graph
+    sess.run(tf.global_variables_initializer())
+    model.set_session(sess)
+    model.load_pretrained_imagenet()
+    writer = tf.summary.FileWriter('/home/tpaixao/graph_train', sess.graph)
 
-        # placeholders
-        images_ph = tf.placeholder(tf.float32, name='images_ph', shape=(None, H, W, C)) # channels last
-        labels_ph = tf.placeholder(tf.float32, name='labels_ph', shape=(None, CONFIG_NUM_CLASSES)) # one-hot enconding
-        global_step_ph = tf.placeholder(tf.int32, name='global_step_ph', shape=()) # control dropout of the model
+    # training loop
+    loss_sample = []
+    loss_avg_per_sample = []
+    steps = []
+    global_step = 1
+    for epoch in range(1, CONFIG_TRAIN_NUM_EPOCHS + 1):
+        for step in range(1, num_steps_per_epoch + 1):
+            # batch data
+            images, labels = sess.run(next_batch_op)
+            # train
+            learning_rate, loss, x = sess.run([learning_rate_op, loss_op, train_op], feed_dict={images_ph: images, labels_ph: labels, global_step_ph: global_step})
+            # show training status
+            loss_sample.append(loss)
+            if (step % 10 == 0) or (step == num_steps_per_epoch):
+                loss_avg_per_sample.append(np.mean(loss_sample))
+                steps.append(global_step)
+                elapsed = time.time() - t0
+                remaining = elapsed * (total_steps - global_step) / global_step
+                print('train: [{:.2f}%] step={}/{} epoch={} loss={:.5f} :: {:.2f}/{:.2f} seconds lr={}\r'.format(
+                    100 * global_step / total_steps, global_step, total_steps, epoch,
+                    loss_avg_per_sample[-1], elapsed, remaining, learning_rate
+                ), end='')
+                loss_sample = []
+            global_step += 1
+        # save epoch model
+        model.save_weights('{}/model/{}.npy'.format(train_dir, epoch))
+    sess.close()
+    t_train = time.time() - t0 # stop cron
 
-        # dataset iterator
-        next_batch_op = input_fn(samples_dir, mode='train', img_shape=(H, W), num_channels=C)
-        print('C')
-        # architecture definition
-        model = SqueezeNet(images_ph, num_classes=CONFIG_NUM_CLASSES, mode='train', channels_first=False, sess=sess)
-        print('D')
-        # model = SqueezeNet(images_ph, num_classes=CONFIG_NUM_CLASSES, is_train=True, channels_first=False, sess=sess)
-        logits_op = tf.reshape(model.output, [-1, CONFIG_NUM_CLASSES]) # #batches x #classes (squeeze height dimension)
+    # save training loss curve
+    plt.plot(steps, loss_avg_per_sample)
+    plt.savefig('{}/loss.png'.format(train_dir))
+    loss_plt_data = dict(loss=loss_avg_per_sample, steps=steps)
+    np.save('{}/loss_plt_data.npy'.format(train_dir), np.array(loss_plt_data))
 
-        # loss function
-        loss_op = tf.losses.softmax_cross_entropy(onehot_labels=labels_ph, logits=logits_op)
+    # 2) validation -----
+    t0 = time.time()
 
-        # learning rate definition
-        num_steps_per_epoch = math.ceil(num_samples / CONFIG_TRAIN_BATCH_SIZE)
-        total_steps = CONFIG_TRAIN_NUM_EPOCHS * num_steps_per_epoch
-        decay_steps = math.ceil(CONFIG_TRAIN_STEP_SIZE * total_steps)
-        learning_rate_op = tf.train.exponential_decay(CONFIG_TRAIN_INIT_LEARNING_RATE, global_step_ph, decay_steps, 0.1, staircase=True)
+    # clear default graph
+    tf.reset_default_graph()
 
-        # optimizer (adam method) and training operation
-        optimizer = tf.train.AdamOptimizer(learning_rate_op, name='adam')
-        train_op = optimizer.minimize(loss_op)
+    # setting up the dataset of samples
+    filenames, _ = get_dataset_info(samples_dir, mode='val')
+    num_samples = len(filenames)
 
-        # init graph
-        sess.run(tf.global_variables_initializer())
-        print('E')
-        # pretraining
-        model.load_pretrained_imagenet()
-        print('F')
-        # print('trainable==================')
-        # tvars = tf.trainable_variables()
-        # tvars_vals = sess.run(tvars)
-        # for var, val in zip(tvars, tvars_vals):
-        #     print(var.name)
+    # placeholders
+    images_ph = tf.placeholder(tf.float32, name='images_ph', shape=(None, H, W, C)) # channels last
+    # labels_ph = tf.placeholder(tf.float32, name='labels_val_ph', shape=(None,)) # normal enconding
 
-        # print('global==================')
-        # tvars = tf.global_variables()
-        # tvars_vals = sess.run(tvars)
-        # print(len(tvars))
-        # for var, val in zip(tvars, tvars_vals):
-        #     print(var.name)
-            # if 'Conv1/kernel:0' in var.name or 'Conv_Class/kernel:0' in var.name:
-            #      print(var.name, val)
-                # break
-        # import sys
-        # sys.exit(0)
+    # dataset iterator
+    next_batch_op = input_fn(samples_dir, mode='val', img_shape=(H, W), num_channels=C)
 
-        # setup train data directory
-        os.makedirs('{}/model'.format(train_dir), exist_ok=True)
+    # architecture deifnition
+    model = SqueezeNet(images_ph, num_classes=CONFIG_NUM_CLASSES, mode='inference', channels_first=False)
+    logits_op = tf.reshape(model.output, [-1, CONFIG_NUM_CLASSES]) # #batches x #classes (squeeze height dimension)
 
-        # training loop
-        t0 = time.time()
-        loss_sample = []
-        loss_avg_per_sample = []
-        steps = []
-        global_step = 1
-        for epoch in range(1, CONFIG_TRAIN_NUM_EPOCHS + 1):
-            for step in range(1, num_steps_per_epoch + 1):
-                # batch data
-                images, labels = sess.run(next_batch_op)
-                # train
-                learning_rate, loss, x = sess.run([learning_rate_op, loss_op, train_op], feed_dict={images_ph: images, labels_ph: labels, global_step_ph: global_step})
-                # show training status
-                loss_sample.append(loss)
-                if (step % 10 == 0) or (step == num_steps_per_epoch):
-                    loss_avg_per_sample.append(np.mean(loss_sample))
-                    steps.append(global_step)
-                    elapsed = time.time() - t0
-                    remaining = elapsed * (total_steps - global_step) / global_step
-                    print('train: [{:.2f}%] step={}/{} epoch={} loss={:.5f} :: {:.2f}/{:.2f} seconds lr={}\r'.format(
-                        100 * global_step / total_steps, global_step, total_steps, epoch,
-                        loss_avg_per_sample[-1], elapsed, remaining, learning_rate
-                    ), end='')
-                    loss_sample = []
-                global_step += 1
-            # save epoch model
-            model.save_weights('{}/model/{}.npy'.format(train_dir, epoch))
-        sess.close()
-        t_train = time.time() - t0 # stop cron
+    # predictions
+    predictions_op = tf.argmax(logits_op, 1)
 
-        # save training loss curve
-        plt.plot(steps, loss_avg_per_sample)
-        plt.savefig('{}/loss.png'.format(train_dir))
-        loss_plt_data = dict(loss=loss_avg_per_sample, steps=steps)
-        np.save('{}/loss_plt_data.npy'.format(train_dir), np.array(loss_plt_data))
+    # setup a new session
+    sess = tf.Session(config=config)
+    model.set_session(sess)
 
-        # 2) validation -----
+    # validation loop
+    num_steps_per_epoch = math.ceil(num_samples / CONFIG_TRAIN_BATCH_SIZE)
+    best_epoch = 0
+    best_accuracy = 0.0
+    accuracy_per_epoch = []
+    for epoch in range(1, CONFIG_TRAIN_NUM_EPOCHS + 1):
+        # load epoch model
+        model.load_weights('{}/model/{}.npy'.format(train_dir, epoch))
+        writer = tf.summary.FileWriter('/home/tpaixao/graph_val/{}'.format(epoch), sess.graph)
+        total_correct = 0
+        for step in range(1, num_steps_per_epoch + 1):
+            images, labels = sess.run(next_batch_op)
+            batch_size = images.shape[0]
+            predictions = sess.run(predictions_op, feed_dict={images_ph: images})
+            num_correct = np.sum(predictions==labels)
+            total_correct += num_correct
+            if (step % 10 == 0) or (step == num_steps_per_epoch):
+                print('val: step={} accuracy={:.2f}\r'.format(step, 100 * num_correct / batch_size), end='')
+        # epoch average accuracy
+        accuracy = 100.0 * total_correct / num_samples
+        accuracy_per_epoch.append(accuracy)
+        if accuracy > best_accuracy:
+            best_accuracy = accuracy
+            best_epoch = epoch
+    sess.close()
+    t_val = time.time() - t0 # stop cron
 
-        # setup a new session/graph
-        # tf.reset_default_graph()
-        sess = tf.Session(config=config)
+    print('val: best epoch={} accuracy={:.2f}'.format(best_epoch, best_accuracy))
+    plt.clf()
+    epochs = list(range(1, CONFIG_TRAIN_NUM_EPOCHS + 1))
+    plt.plot(epochs, accuracy_per_epoch)
+    plt.savefig('{}/accuracy.png'.format(train_dir))
+    accuracy_plt_data = dict(accuracy=accuracy_per_epoch, epochs=epochs)
+    np.save('{}/accuracy_plt_data.npy'.format(train_dir), np.array(accuracy_plt_data))
 
-        # setting up the dataset of samples
-        filenames, _ = get_dataset_info(samples_dir, mode='val')
-        num_samples = len(filenames)
-
-        # placeholders
-        # images_ph = tf.placeholder(tf.float32, name='images_ph', shape=(None, H, W, C)) # channels last
-        labels_ph = tf.placeholder(tf.float32, name='labels_val_ph', shape=(None,)) # normal enconding
-
-        # dataset iterator
-        next_batch_op = input_fn(samples_dir, mode='val', img_shape=(H, W), num_channels=C)
-
-        # architecture deifnition
-        model = SqueezeNet(images_ph, num_classes=CONFIG_NUM_CLASSES, mode='inference', channels_first=False, sess=sess)
-        logits_op = tf.reshape(model.output, [-1, CONFIG_NUM_CLASSES]) # #batches x #classes (squeeze height dimension)
-
-        # predictions
-        predictions_op = tf.argmax(logits_op, 1)
-
-        # validation loop
-        num_steps_per_epoch = math.ceil(num_samples / CONFIG_TRAIN_BATCH_SIZE)
-        best_epoch = 0
-        best_accuracy = 0.0
-        accuracy_per_epoch = []
-        for epoch in range(1, CONFIG_TRAIN_NUM_EPOCHS + 1):
-            # load epoch model
-            model.load_weights('{}/model/{}.npy'.format(train_dir, epoch))
-            total_correct = 0
-            for step in range(1, num_steps_per_epoch + 1):
-                images, labels = sess.run(next_batch_op)
-                batch_size = images.shape[0]
-                # logits, predictions = sess.run([logits_op, predictions_op], feed_dict={images_ph: images, labels_ph: labels})#, train_ph: False})
-                logits, predictions = sess.run([logits_op, predictions_op], feed_dict={images_ph: images, labels_ph: labels, train_ph: False})
-                num_correct = np.sum(predictions==labels)
-                total_correct += num_correct
-                if (step % 10 == 0) or (step == num_steps_per_epoch):
-                    print('val: step={} accuracy={:.2f}\r'.format(step, 100 * num_correct / batch_size), end='')
-            # epoch average accuracy
-            accuracy = 100.0 * total_correct / num_samples
-            accuracy_per_epoch.append(accuracy)
-            if accuracy > best_accuracy:
-                best_accuracy = accuracy
-                best_epoch = epoch
-            # print('epoch={} (best={}) accuracy={:.2f} (best={:.2f})'.format(epoch, best_epoch, accuracy, best_accuracy))
-        sess.close()
-        tf.reset_default_graph()
-        t_val = time.time() - t0 # stop cron
-
-        print('val: best epoch={} accuracy={:.2f}'.format(best_epoch, best_accuracy))
-        plt.clf()
-        epochs = list(range(1, CONFIG_TRAIN_NUM_EPOCHS + 1))
-        plt.plot(epochs, accuracy_per_epoch)
-        plt.savefig('{}/accuracy.png'.format(train_dir))
-        accuracy_plt_data = dict(accuracy=accuracy_per_epoch, epochs=epochs)
-        np.save('{}/accuracy_plt_data.npy'.format(train_dir), np.array(accuracy_plt_data))
-
-        # dump training info
-        info = {
-            'time_train': t_train,
-            'time_val': t_val,
-            'best_epoch': best_epoch
-        }
-        json.dump(info, open('{}/info.json'.format(train_dir), 'w'))
-        print('train time={:.2f} min. val time={:.2f} min.'.format(t_train / 60., t_val / 60.))
+    # dump training info
+    info = {
+        'time_train': t_train,
+        'time_val': t_val,
+        'best_epoch': best_epoch
+    }
+    json.dump(info, open('{}/info.json'.format(train_dir), 'w'))
+    print('train time={:.2f} min. val time={:.2f} min.'.format(t_train / 60., t_val / 60.))

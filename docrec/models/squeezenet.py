@@ -9,7 +9,7 @@ import tensorflow as tf
 
 class SqueezeNet:
 
-    def __init__(self, input_tensor, num_classes=1000, mode='train', model_scope='SqueezeNet', channels_first=False, sess=None):
+    def __init__(self, input_tensor, num_classes=1000, mode='train', model_scope='SqueezeNet', channels_first=False):
         ''' SqueezeNet v1.1
         Adpated from the Caffe original implementation: https://github.com/DeepScale/SqueezeNet/tree/master/SqueezeNet_v1.1
         Reference:
@@ -21,12 +21,7 @@ class SqueezeNet:
         }
         '''
 
-        self.sess = sess
-        if self.sess is None:
-            config = tf.ConfigProto()
-            config.gpu_options.allow_growth = True
-            self.sess = tf.Session(config=config)
-
+        self.sess = None
         self.scope = model_scope
 
         assert mode in ['train', 'inference']
@@ -83,6 +78,12 @@ class SqueezeNet:
             self.view = conv10
 
 
+    def set_session(self, sess):
+        ''' Assign a pre-built session the model's.'''
+
+        self.sess = sess
+
+
     def load_pretrained_imagenet(self):
         ''' Load network weights and biases (format caffe-tensorflow) pretrained on ImageNet.'''
 
@@ -101,7 +102,10 @@ class SqueezeNet:
 
         first_layer='conv1'
         # data_dict = np.load(weights_path, encoding='latin1').item()
-        data_dict = np.load(weights_path, allow_pickle=True).item()
+        # data_dict = np.load(weights_path, allow_pickle=True).item()
+        data_dict = np.load(weights_path).item()
+        # var_ph = tf.placeholder(tf.float32, shape=[None])
+        # assign_var_op = tf.assign(var_ph, )
         for layer in data_dict:
             if layer in ignore_layers:
                 continue
@@ -113,7 +117,9 @@ class SqueezeNet:
                         var = tf.get_variable(param_name)
                         if (layer == first_layer) and BGR and (param_name == 'kernel'):
                             data = data[:, :, [2, 1, 0], :] # BGR => RGB
+                        print('antes')
                         self.sess.run(var.assign(data))
+                        print('depois')
                 except ValueError:
                     if not ignore_missing:
                         raise
