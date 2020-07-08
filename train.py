@@ -1,68 +1,18 @@
-import gc
 import os
+import sys
 import json
 import time
 import math
-import cv2
-import random
 import numpy as np
-import multiprocessing
 import tensorflow as tf
 import matplotlib as mpl
 mpl.use('Agg')
 import matplotlib.pyplot as plt
 
-from docrec.models.squeezenet import SqueezeNet
 from config import *
+from dataset import Dataset
 
-NUM_CLASSES = 2
-
-
-def get_dataset_info(samples_dir, mode='train', max_size=None):
-    ''' Returns: filenames and labels. '''
-
-    assert mode in ['train', 'val']
-
-    txt_file = '{}/{}.txt'.format(samples_dir, mode)
-    lines = open(txt_file).readlines()
-    if max_size is not None:
-        lines = lines [ : int(max_size * len(lines))]
-    filenames = []
-    labels = []
-    for line in lines:
-        filename, label = line.split()
-        filenames.append(filename)
-        labels.append(int(label))
-    return filenames, labels
-
-
-def input_fn(samples_dir, mode='train', img_shape=(31, 31), resize=False, num_channels=3):
-    ''' Dataset load function.'''
-
-    def _parse_function(filename, label):
-        ''' Parse function. '''
-
-        image_string = tf.read_file(filename)
-        image = tf.image.decode_jpeg(image_string, channels=num_channels, dct_method='INTEGER_ACCURATE') # works with png too
-        image = tf.image.convert_image_dtype(image, tf.float32)
-        if resize:
-            image = tf.image.resize_image_with_crop_or_pad(image, img_shape[0], img_shape[1])
-        # one hot representation for training images
-        if mode == 'train':
-            return image, tf.one_hot(label, CONFIG_NUM_CLASSES)
-        return image, label
-
-    assert mode in ['train', 'val']
-
-    filenames, labels = get_dataset_info(samples_dir, mode)
-
-    # TF dataset pipeline
-    dataset = tf.data.Dataset.from_tensor_slices((filenames, labels))
-    if mode == 'train':
-        dataset = dataset.shuffle(len(filenames))
-    dataset = dataset.map(_parse_function, num_parallel_calls=CONFIG_TRAIN_NUM_PROC)
-    dataset = dataset.batch(CONFIG_TRAIN_BATCH_SIZE).repeat(CONFIG_TRAIN_NUM_EPOCHS)
-    return dataset.make_one_shot_iterator().get_next()
+from docrec.models.squeezenet import SqueezeNet
 
 
 def train_and_validate(samples_dir, train_dir):
@@ -73,42 +23,39 @@ def train_and_validate(samples_dir, train_dir):
     # 1) train -----
     t0 = time.time() # start cron
 
+    print('loading training samples :: ', end='')
+    sys.stdout.flush()
+    dataset = Dataset(samples_dir, mode='train')
+    H, W, C = dataset.sample_size
+    print('num_samples={} sample_size={}x{}'.format(dataset.num_samples, H, W))
+
     # setup train data directory
     os.makedirs('{}/model'.format(train_dir), exist_ok=True)
 
     # clear default graph
     tf.reset_default_graph()
 
-    # setting up the dataset of samples
-    filenames, _ = get_dataset_info(samples_dir, mode='train')
-    num_samples = len(filenames)
-    input_size = cv2.imread(filenames[0]).shape
-    H, W, C = input_size
-
     # placeholders
     images_ph = tf.placeholder(tf.float32, name='images_ph', shape=(None, H, W, C)) # channels last
     labels_ph = tf.placeholder(tf.float32, name='labels_ph', shape=(None, CONFIG_NUM_CLASSES)) # one-hot enconding
     global_step_ph = tf.placeholder(tf.int32, name='global_step_ph', shape=()) # control dropout of the model
 
-    # dataset iterator
-    next_batch_op = input_fn(samples_dir, mode='train', img_shape=(H, W), num_channels=C)
-
     # architecture definition
     model = SqueezeNet(images_ph, num_classes=CONFIG_NUM_CLASSES, mode='train', channels_first=False)
-    # logits_op = tf.reshape(model.output, [-1, CONFIG_NUM_CLASSES]) # #batches x #classes (squeeze height dimension)
+    logits_op = tf.reshape(model.output, [-1, CONFIG_NUM_CLASSES]) # #batches x #classes (squeeze height dimension)
 
-    # # loss function
-    # loss_op = tf.losses.softmax_cross_entropy(onehot_labels=labels_ph, logits=logits_op)
+    # loss function
+    loss_op = tf.losses.softmax_cross_entropy(onehot_labels=labels_ph, logits=logits_op)
 
-    # # learning rate definition
-    # num_steps_per_epoch = math.ceil(num_samples / CONFIG_TRAIN_BATCH_SIZE)
-    # total_steps = CONFIG_TRAIN_NUM_EPOCHS * num_steps_per_epoch
-    # decay_steps = math.ceil(CONFIG_TRAIN_STEP_SIZE * total_steps)
-    # learning_rate_op = tf.train.exponential_decay(CONFIG_TRAIN_INIT_LEARNING_RATE, global_step_ph, decay_steps, 0.1, staircase=True)
+    # learning rate definition
+    num_steps_per_epoch = math.ceil(dataset.num_samples / CONFIG_TRAIN_BATCH_SIZE)
+    total_steps = CONFIG_TRAIN_NUM_EPOCHS * num_steps_per_epoch
+    decay_steps = math.ceil(CONFIG_TRAIN_STEP_SIZE * total_steps)
+    learning_rate_op = tf.train.exponential_decay(CONFIG_TRAIN_INIT_LEARNING_RATE, global_step_ph, decay_steps, 0.1, staircase=True)
 
-    # # optimizer (adam method) and training operation
-    # optimizer = tf.train.AdamOptimizer(learning_rate_op, name='adam')
-    # train_op = optimizer.minimize(loss_op)
+    # optimizer (adam method) and training operation
+    optimizer = tf.train.AdamOptimizer(learning_rate_op, name='adam')
+    train_op = optimizer.minimize(loss_op)
 
     # session setup
     config = tf.ConfigProto()
@@ -129,7 +76,7 @@ def train_and_validate(samples_dir, train_dir):
     for epoch in range(1, CONFIG_TRAIN_NUM_EPOCHS + 1):
         for step in range(1, num_steps_per_epoch + 1):
             # batch data
-            images, labels = sess.run(next_batch_op)
+            images, labels = dataset.next_batch()
             # train
             learning_rate, loss, x = sess.run([learning_rate_op, loss_op, train_op], feed_dict={images_ph: images, labels_ph: labels, global_step_ph: global_step})
             # show training status
@@ -159,19 +106,17 @@ def train_and_validate(samples_dir, train_dir):
     # 2) validation -----
     t0 = time.time()
 
+    print('loading validation samples :: ', end='')
+    sys.stdout.flush()
+    dataset = Dataset(samples_dir, mode='val')
+    H, W, C = dataset.sample_size
+    print('num_samples={} sample_size={}x{}'.format(dataset.num_samples, H, W))
+
     # clear default graph
     tf.reset_default_graph()
 
-    # setting up the dataset of samples
-    filenames, _ = get_dataset_info(samples_dir, mode='val')
-    num_samples = len(filenames)
-
     # placeholders
     images_ph = tf.placeholder(tf.float32, name='images_ph', shape=(None, H, W, C)) # channels last
-    # labels_ph = tf.placeholder(tf.float32, name='labels_val_ph', shape=(None,)) # normal enconding
-
-    # dataset iterator
-    next_batch_op = input_fn(samples_dir, mode='val', img_shape=(H, W), num_channels=C)
 
     # architecture deifnition
     model = SqueezeNet(images_ph, num_classes=CONFIG_NUM_CLASSES, mode='inference', channels_first=False)
@@ -185,7 +130,7 @@ def train_and_validate(samples_dir, train_dir):
     model.set_session(sess)
 
     # validation loop
-    num_steps_per_epoch = math.ceil(num_samples / CONFIG_TRAIN_BATCH_SIZE)
+    num_steps_per_epoch = math.ceil(dataset.num_samples / CONFIG_TRAIN_BATCH_SIZE)
     best_epoch = 0
     best_accuracy = 0.0
     accuracy_per_epoch = []
@@ -195,7 +140,8 @@ def train_and_validate(samples_dir, train_dir):
         writer = tf.summary.FileWriter('/home/tpaixao/graph_val/{}'.format(epoch), sess.graph)
         total_correct = 0
         for step in range(1, num_steps_per_epoch + 1):
-            images, labels = sess.run(next_batch_op)
+            # batch data
+            images, labels = dataset.next_batch()
             batch_size = images.shape[0]
             predictions = sess.run(predictions_op, feed_dict={images_ph: images})
             num_correct = np.sum(predictions==labels)
@@ -203,7 +149,7 @@ def train_and_validate(samples_dir, train_dir):
             if (step % 10 == 0) or (step == num_steps_per_epoch):
                 print('val: step={} accuracy={:.2f}\r'.format(step, 100 * num_correct / batch_size), end='')
         # epoch average accuracy
-        accuracy = 100.0 * total_correct / num_samples
+        accuracy = 100.0 * total_correct / dataset.num_samples
         accuracy_per_epoch.append(accuracy)
         if accuracy > best_accuracy:
             best_accuracy = accuracy

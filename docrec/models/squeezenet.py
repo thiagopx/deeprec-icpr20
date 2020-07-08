@@ -117,9 +117,7 @@ class SqueezeNet:
                         var = tf.get_variable(param_name)
                         if (layer == first_layer) and BGR and (param_name == 'kernel'):
                             data = data[:, :, [2, 1, 0], :] # BGR => RGB
-                        print('antes')
                         self.sess.run(var.assign(data))
-                        print('depois')
                 except ValueError:
                     if not ignore_missing:
                         raise

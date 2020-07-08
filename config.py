@@ -6,19 +6,20 @@ CONFIG_SEED = 1593803615
 CONFIG_NUM_CLASSES = 2
 
 # samples generation
-# <=  adjust dir
-CONFIG_SAMPLES_BASE_DIR = '~/samples/deeprec-icpr20'
+CONFIG_SAMPLES_BASE_DIR = '~/samples/deeprec-icpr20' # <=  adjust dir
 CONFIG_SAMPLES_SIZE = 31
 CONFIG_SAMPLES_RATIO_VAL = .1
 CONFIG_SAMPLES_THRESH_BLACK = .2
 CONFIG_SAMPLES_DISP_NOISE = 2
 CONFIG_SAMPLES_MAX_POS = 1000
+CONFIG_SAMPLES_MAX_POS_FT = 10000 # fine tuning
 CONFIG_SAMPLES_RATIO_NEG = 1.0
 CONFIG_SAMPLES_NUM_STRIPS = 30
 CONFIG_SAMPLES_STRIDE = 2
+CONFIG_SAMPLES_STRIDE_FT = 3
 
 # TRAIN
-CONFIG_TRAIN_BASE_DIR = '~/traindata/deeprec-icpr20'
+CONFIG_TRAIN_BASE_DIR = '/mnt/data/traindata/deeprec-icpr20' # <=  adjust dir
 # CONFIG_TRAIN_NUM_PROC = 1 # for dataset processing
 CONFIG_TRAIN_NUM_PROC = max(1, multiprocessing.cpu_count() - 1) # for dataset processing
 CONFIG_TRAIN_INIT_LEARNING_RATE = .0001

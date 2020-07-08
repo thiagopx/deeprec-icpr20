@@ -133,7 +133,7 @@ class Strips(object):
             self.strips.append(strip)
 
 
-    def image(self, order=None, ground_truth_order=False, displacements=None, filled=False):
+    def image(self, order=None, ground_truth_order=False, displacements=None, filled=False, highlight=False, highlight_idx=0, alpha=0.5, color=(255, 0, 255)):
         ''' Return the document as an image.
 
         order: list with indices of the strips (if not None, ground_truth order is ignored).
@@ -153,6 +153,15 @@ class Strips(object):
 
         if displacements is None:
             displacements = len(self.strips) * [0]
+
+        corrected = [strip.copy() for strip in corrected]
+        if highlight:
+            current = corrected[highlight_idx]
+            overlay = np.zeros_like(current.image)
+            mask = current.mask > 0
+            overlay[mask] = color
+            current.image = cv2.addWeighted(overlay, alpha, current.image, 1 - alpha, 0)
+
         stacked = corrected[0].copy()
         for current, disp in zip(corrected[1 :], displacements):
             stacked.stack(current, disp=disp, filled=filled)
