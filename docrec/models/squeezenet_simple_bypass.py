@@ -6,7 +6,7 @@ import tensorflow as tf
 
 class SqueezeNetSB:
 
-    def __init__(self, input_tensor, num_classes=1000, mode='train', model_scope='SqueezeNetSB', channels_first=False, sess=None):
+    def __init__(self, input_tensor, num_classes=1000, mode='train', model_scope='SqueezeNetSB', channels_first=False):
         ''' SqueezeNet v1.1 (simple bypass)
         Adpated from the Caffe original implementation: https://github.com/DeepScale/SqueezeNet/tree/master/SqueezeNet_v1.1
         Reference:
@@ -24,11 +24,6 @@ class SqueezeNetSB:
         assert mode in ['train', 'val', 'test']
 
         self.sess = sess
-        if self.sess is None:
-            config = tf.ConfigProto()
-            config.gpu_options.allow_growth = True
-            self.sess = tf.Session(config=config)
-
         self.scope = model_scope
 
         data_format = 'channels_first' if channels_first else 'channels_last'
@@ -97,6 +92,12 @@ class SqueezeNetSB:
 
             self.output = logits
             self.view = conv10
+
+
+    def set_session(self, sess):
+        ''' Assign a pre-built session the model's.'''
+
+        self.sess = sess
 
 
     def load_weights(self, weights_path, ignore_layers=[], BGR=False, ignore_missing=False):

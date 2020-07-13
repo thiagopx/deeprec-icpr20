@@ -7,7 +7,7 @@ class Algorithm(object):
     __metaclass__ = abc.ABCMeta
 
     @abc.abstractmethod
-    def id(self):
+    def name(self):
         ''' Return the id (short name) of the algorithm. '''
 
 

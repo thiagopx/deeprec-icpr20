@@ -1,30 +1,46 @@
-# from __future__ import absolute_import
-# from __future__ import division
-# from __future__ import print_function
-
-import sys
-from time import time
 import cv2
+from time import time
 import numpy as np
 import math
 import tensorflow as tf
-from keras import backend as K
 from skimage.filters import threshold_sauvola, threshold_otsu
 
 from .algorithm import Algorithm
 from ..models.squeezenet import SqueezeNet
 from ..models.squeezenet_simple_bypass import SqueezeNetSB
-from ..models.mobilenet import MobileNetFC
+
+
+def process_image_rgb(image):
+
+    return image.astype(np.float32) / 255.
+
+
+def process_image_graycale(image):
+
+    gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY).astype(np.float32) / 255.
+    return np.stack(3 * [gray], axis=-1) # channels last
+
+
+def process_image_binary(image, thresh_func):
+
+    gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+    threshold = thresh_func(gray)
+    thresholded = (gray > threshold).astype(np.float32)
+    return np.stack(3 * [thresholded], axis=-1) # channels last
 
 
 class Proposed(Algorithm):
     '''  Proposed algorithm. '''
 
-    def __init__(self, arch, weights_path, vshift, input_size, num_classes, thresh='otsu', verbose=False, offset=None):
+    def __init__(self, arch, weights_path, vshift, input_size, num_classes, representation='rgb', thresh='otsu', verbose=False, offset=None, name='proposed'):
 
-        assert arch in ['squeezenet', 'squeezenet-bypass', 'mobilenet']
+        assert arch in ['squeezenet', 'squeezenet-bypass']
+        assert representation in ['binary', 'rgb', 'grayscale']
         assert thresh in ['otsu', 'sauvola']
 
+        self._name = name
+
+        # session
         config = tf.ConfigProto()
         config.gpu_options.allow_growth = True
         self.sess = tf.Session(config=config)
@@ -40,11 +56,9 @@ class Proposed(Algorithm):
 
         # model
         if arch == 'squeezenet':
-            model = SqueezeNet(self.images_ph, num_classes=num_classes, mode='test', channels_first=False, sess=self.sess)
-        elif arch == 'mobilenet':
-            model = MobileNetFC(self.images_ph, num_classes=num_classes, sess=self.sess)
+            model = SqueezeNet(self.images_ph, num_classes=num_classes, mode='inference', channels_first=False)
         else:
-            model = SqueezeNetSB(self.images_ph, num_classes=num_classes, mode='test', channels_first=False, sess=self.sess)
+            model = SqueezeNetSB(self.images_ph, num_classes=num_classes, mode='inference', channels_first=False)
         logits = model.output
         probs = tf.nn.softmax(logits)
         self.comp_op = tf.reduce_max(probs[:, 1])
@@ -55,14 +69,19 @@ class Proposed(Algorithm):
         self.displacements = None
 
         # init model
-
         self.sess.run(tf.global_variables_initializer())
+        model.set_session(self.sess)
         model.load_weights(weights_path)
 
         self.verbose = verbose
         self.inferente_time = 0
-        self.thresh = thresh
-        self.arch = arch
+
+        thresh_func = threshold_sauvola if thresh == 'sauvola' else threshold_otsu
+        self.process_image = process_image_rgb
+        if representation == 'grayscale':
+            self.process_image = process_image_graycale
+        elif representation == 'binary':
+            self.process_image = lambda image: process_image_binary(image, thresh_func)
 
 
     def __del__(self):
@@ -75,11 +94,7 @@ class Proposed(Algorithm):
     def _extract_features(self, strip):
         ''' Extract image around the border. '''
 
-        image = cv2.cvtColor(strip.filled_image(), cv2.COLOR_RGB2GRAY)
-        thresh_func = threshold_sauvola if self.thresh == 'sauvola' else threshold_otsu
-        thresh = thresh_func(image)
-        thresholded = (image > thresh).astype(np.float32)
-        image_bin = np.stack(3 * [thresholded]).transpose((1, 2, 0)) # channels last
+        image = self.process_image(strip.filled_image())
 
         wl = math.ceil(self.input_size_w / 2)
         wr = int(self.input_size_w / 2)
@@ -93,14 +108,14 @@ class Proposed(Algorithm):
         left = np.ones((self.input_size_h, wl, 3), dtype=np.float32)
         for y, x in enumerate(left_border[offset : offset + self.input_size_h]):
             w_new = min(wl, w - x)
-            left[y, : w_new] = image_bin[y + offset, x : x + w_new]
+            left[y, : w_new] = image[y + offset, x : x + w_new]
 
         # right image
         right_border = strip.offsets_r
         right = np.ones((self.input_size_h, wr, 3), dtype=np.float32)
         for y, x in enumerate(right_border[offset : offset + self.input_size_h]):
             w_new = min(wr, x + 1)
-            right[y, : w_new] = image_bin[y + offset, x - w_new + 1: x + 1]
+            right[y, : w_new] = image[y + offset, x - w_new + 1: x + 1]
 
         return left, right
 
@@ -154,6 +169,6 @@ class Proposed(Algorithm):
         return self
 
 
-    def id(self):
+    def name():
 
-        return 'proposed_' + self.arch
+        return self._name

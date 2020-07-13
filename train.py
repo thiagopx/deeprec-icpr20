@@ -6,7 +6,7 @@ import math
 import numpy as np
 import tensorflow as tf
 import matplotlib as mpl
-mpl.use('Agg')
+# mpl.use('Agg')
 import matplotlib.pyplot as plt
 
 from config import *
@@ -15,17 +15,16 @@ from dataset import Dataset
 from docrec.models.squeezenet import SqueezeNet
 
 
-def train_and_validate(samples_dir, train_dir):
+def train_and_validate(samples_dir, train_dir, pretrained='imagenet', representation='rgb'):
 
     ''' Training stage. '''
-
 
     # 1) train -----
     t0 = time.time() # start cron
 
     print('loading training samples :: ', end='')
     sys.stdout.flush()
-    dataset = Dataset(samples_dir, mode='train')
+    dataset = Dataset(samples_dir, mode='train', representation=representation)
     H, W, C = dataset.sample_size
     print('num_samples={} sample_size={}x{}'.format(dataset.num_samples, H, W))
 
@@ -65,8 +64,14 @@ def train_and_validate(samples_dir, train_dir):
     # init graph
     sess.run(tf.global_variables_initializer())
     model.set_session(sess)
-    model.load_pretrained_imagenet()
-    writer = tf.summary.FileWriter('/home/tpaixao/graph_train', sess.graph)
+    if pretrained == 'imagenet':
+        model.load_pretrained_imagenet()
+    elif pretrained is not None:
+        best_epoch = json.load(open('{}/info.json'.format(pretrained), 'r'))['best_epoch']
+        weights_path = '{}/model/{}.npy'.format(pretrained, best_epoch)
+        model.load_weights(weights_path)
+
+    # writer = tf.summary.FileWriter('/home/tpaixao/graph_train', sess.graph)
 
     # training loop
     loss_sample = []
@@ -108,7 +113,7 @@ def train_and_validate(samples_dir, train_dir):
 
     print('loading validation samples :: ', end='')
     sys.stdout.flush()
-    dataset = Dataset(samples_dir, mode='val')
+    dataset = Dataset(samples_dir, mode='val', representation=representation)
     H, W, C = dataset.sample_size
     print('num_samples={} sample_size={}x{}'.format(dataset.num_samples, H, W))
 
@@ -137,7 +142,7 @@ def train_and_validate(samples_dir, train_dir):
     for epoch in range(1, CONFIG_TRAIN_NUM_EPOCHS + 1):
         # load epoch model
         model.load_weights('{}/model/{}.npy'.format(train_dir, epoch))
-        writer = tf.summary.FileWriter('/home/tpaixao/graph_val/{}'.format(epoch), sess.graph)
+        # writer = tf.summary.FileWriter('/home/tpaixao/graph_val/{}'.format(epoch), sess.graph)
         total_correct = 0
         for step in range(1, num_steps_per_epoch + 1):
             # batch data
